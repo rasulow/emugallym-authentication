@@ -6,9 +6,9 @@ from drf_yasg import openapi
 
 schema_view = get_schema_view(
    openapi.Info(
-      title="Paytoleg Auth Service",
+      title="Emugallym Auth Service",
       default_version='v1',
-      description="Paytoleg Authentication Service",
+      description="Emugallym Authentication Service",
       terms_of_service="https://www.google.com/policies/terms/",
       contact=openapi.Contact(email="contact@snippets.local"),
       license=openapi.License(name="BSD License"),
