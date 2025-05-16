@@ -39,6 +39,11 @@ class UserDetailAPIView(APIView):
         """Handle GET requests to get detail of user."""
         try:
             user = CustomUser.objects.filter(id=id).first()
+            if not user:
+                return Response(
+                    {"detail": "User not found"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
             serializer = serializers.UsersListSerializer(user)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
