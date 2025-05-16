@@ -3,17 +3,28 @@ from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
 from dotenv import load_dotenv
-from account import models, tasks, services
+from account import models, tasks, services, exceptions
 from auth.logging_config import logger
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 load_dotenv()
 
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
 
+        token['role'] = user.role 
+        token['user_id'] = user.id
+
+        return token
+    
+    
 class UsersListSerializer(serializers.ModelSerializer):
     """Serializer for listing all users."""
     class Meta:
         model = models.CustomUser
-        fields = ('id', 'email', 'phone_number', 'first_name', 'last_name', 'is_active', 'is_phone_verified')
+        fields = ('id', 'email', 'phone_number', 'first_name', 'last_name', 'role', 'educational_institution', 'is_active', 'is_phone_verified')
 
 
 class UserRegisterSerializer(serializers.Serializer):
@@ -34,6 +45,8 @@ class UserRegisterSerializer(serializers.Serializer):
     )
     first_name = serializers.CharField(required=True)
     last_name = serializers.CharField(required=True)
+    role = serializers.ChoiceField(choices=models.CustomUser.ROLE_CHOICES, default='teacher')
+    educational_institution = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs):
         """Validate registration data before creating a user."""
@@ -65,65 +78,82 @@ class UserRegisterSerializer(serializers.Serializer):
         return attrs
 
     def create(self, validated_data):
-        """Create a user, generate a verification code, and send it via SMS."""
         try:
-            user = models.CustomUser.objects.create_user(
-                email=validated_data.get('email'),
-                phone_number=validated_data.get('phone_number'),
-                password=validated_data['password1'],
-                first_name=validated_data['first_name'],
-                last_name=validated_data['last_name'],
-            )
-            logger.info(f'New user created successfully. ID: {user.id}, Email: {user.email}, Phone: {user.phone_number}')
-
-            if validated_data.get('phone_number'):
-                return self._create_phone_verification(
-                    user, 
-                    validated_data['phone_number'],
-                )
-            
-            if validated_data.get('email'):
-                return self._create_email_verification(
-                    user, 
-                    validated_data['email']
-                )
-
+            verification_code = models.EmailVerification.gen_code()
+            user = self._create_user(validated_data)
+            self._handle_verification(user, validated_data, verification_code)
+            return user
         except Exception as e:
-            logger.error(f'Error creating user: {str(e)}', exc_info=True)
+            logger.error(f"Error creating user: {str(e)}", exc_info=True)
             raise serializers.ValidationError({'non_field_errors': f'Error creating user: {str(e)}'})
+        
+    def _create_user(self, data):
+        common_fields = {
+            "password": data["password1"],
+            "first_name": data["first_name"],
+            "last_name": data["last_name"],
+            "role": data["role"],
+            "educational_institution": data["educational_institution"],
+        }
 
-    def _create_phone_verification(self, user, phone_number):
-        """Helper method to create a phone verification instance."""
-        verification_code = models.PhoneVerification.gen_code()
-        phone_verification = models.PhoneVerification.objects.create(
-            user=user,
-            phone_number=phone_number,
-            code=verification_code,
-            is_verified=False
-        )
-        logger.info(f'Phone verification code created for user {user.id}')
-        result = services.send_sms(phone_number, verification_code)
-        if result:
-            logger.info(f'Verification code sent successfully to {phone_number} with verification code: {verification_code}')
+        if data.get("phone_number"):
+            user = models.CustomUser.objects.create_user(
+                phone_number=data["phone_number"],
+                **common_fields
+            )
+            logger.info(f'New user created. ID: {user.id}, Phone: {user.phone_number}')
+        elif data.get("email"):
+            user = models.CustomUser.objects.create_user(
+                email=data["email"],
+                **common_fields
+            )
+            logger.info(f'New user created. ID: {user.id}, Email: {user.email}')
         else:
-            logger.error(f'Failed to send verification code to {phone_number} with verification code: {verification_code}')
-        return verification_code
-    
-    def _create_email_verification(self, user, email):
-        verification_code = models.EmailVerification.gen_code()
-        email_verification = models.EmailVerification.objects.create(
-            user=user,
-            email=email,
-            code=verification_code,
-            is_verified=False
-        )
-        logger.info(f'Email verification code created for user {user.id}')
-        result = services.send_email([email], verification_code)
-        if result:
-            logger.info(f'Email sent successfully to {email} with verification code: {verification_code}')
+            raise serializers.ValidationError({'non_field_errors': 'Either phone number or email must be provided.'})
+
+        return user
+
+    def _handle_verification(self, user, data, code):
+        if data.get("phone_number"):
+            self._send_sms_verification(data["phone_number"], code)
+
+            phone_verification = models.PhoneVerification.objects.create(
+                user=user,
+                phone_number=data["phone_number"],
+                code=code,
+                is_verified=False
+            )
+            logger.info(f'Phone verification created for user {user.id}')
+            return
+
+        if data.get("email"):
+            self._send_email_verification(data["email"], code)
+
+            email_verification = models.EmailVerification.objects.create(
+                user=user,
+                email=data["email"],
+                code=code,
+                is_verified=False
+            )
+            logger.info(f'Email verification created for user {user.id}')
+            return
+        
+    def _send_sms_verification(self, phone_number, code):
+        if services.send_sms(phone_number, code):
+            logger.info(f'SMS sent to {phone_number} with code {code}')
         else:
-            logger.error(f'Failed to send email to {email} with verification code: {verification_code}')
-        return verification_code
+            logger.error(f'Failed to send SMS to {phone_number}')
+            raise exceptions.VerificationCodeSentFailure(f'Failed to send SMS to {phone_number}')
+
+    def _send_email_verification(self, email, code):
+        if services.send_email([email], code):
+            logger.info(f'Email sent to {email} with code {code}')
+        else:
+            logger.error(f'Failed to send email to {email}')
+            raise exceptions.VerificationCodeSentFailure(f'Failed to send email to {email}')
+
+
+
 
 
 class UserRegistrationVerifyPhoneSerializer(serializers.Serializer):
@@ -231,7 +261,7 @@ class UserRegistrationVerifyEmailSerializer(serializers.Serializer):
 
         try:
             email_verification = models.EmailVerification.objects.get(email=email, code=code)
-        except models.PhoneVerification.DoesNotExist:
+        except models.EmailVerification.DoesNotExist:
             logger.warning(f'Invalid phone verification attempt for number: {email}')
             raise serializers.ValidationError({'non_field_errors': 'Invalid email or code.'})
 

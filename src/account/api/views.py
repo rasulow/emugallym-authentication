@@ -2,6 +2,7 @@ from os import environ as env
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework_simplejwt.views import TokenObtainPairView
 from drf_yasg.utils import swagger_auto_schema
 from dotenv import load_dotenv
 from account.api import serializers
@@ -12,6 +13,10 @@ from auth.logging_config import logger
 load_dotenv()
 
 
+class CustomTokenObtainPairView(TokenObtainPairView):
+    serializer_class = serializers.CustomTokenObtainPairSerializer
+    
+    
 class UserListAPIView(APIView):
     """API endpoint to retrieve a list of all users."""
 
@@ -46,11 +51,10 @@ class UserRegisterAPIView(APIView):
         serializer = serializers.UserRegisterSerializer(data=request.data)
         if serializer.is_valid():
             try:
-                verification_code = serializer.save()
+                serializer.save()
                 response_data = {
                     "detail": "Verification code sent successfully",
                     "expiration_time_in_minutes": int(env.get('PHONE_NUMBER_VERIFICATION_CODE_EXPIRATION_MINUTES', 10)),
-                    "verification_code": f"{verification_code}",
                 }
                 return Response(response_data, status=status.HTTP_201_CREATED)
             except Exception as e:
