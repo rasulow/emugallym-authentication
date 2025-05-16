@@ -52,11 +52,11 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     USERNAME_FIELD = 'phone_number'
     REQUIRED_FIELDS = []
     
-    def get_fullname(self):
+    def fullname(self):
         return f"{self.first_name} {self.last_name}"
 
     def __str__(self):
-        return self.get_fullname()
+        return self.fullname()
     
     class Meta:
         db_table = 'user'

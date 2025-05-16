@@ -24,7 +24,7 @@ class UsersListSerializer(serializers.ModelSerializer):
     """Serializer for listing all users."""
     class Meta:
         model = models.CustomUser
-        fields = ('id', 'email', 'phone_number', 'first_name', 'last_name', 'role', 'educational_institution', 'is_active', 'is_phone_verified')
+        fields = ('id', 'email', 'phone_number', 'first_name', 'last_name', 'fullname', 'role', 'educational_institution', 'is_active', 'is_phone_verified')
 
 
 class UserRegisterSerializer(serializers.Serializer):
